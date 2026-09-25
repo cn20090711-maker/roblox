@@ -6,12 +6,15 @@ local localPlayer = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 
 -- ================= 設定區 =================
-local MAX_DISTANCE = 500 -- 超出此距離的玩家不會被顯示
+local MAX_DISTANCE = 500
 local PURPLE_COLOR = Color3.fromRGB(180, 50, 255)
 local LINE_THICKNESS = 1.5
 
--- ================= 建立 GUI (絕對安全寫法) =================
--- 盡可能使用 CoreGui，若無法取得則回退到 PlayerGui。
+-- 射線檢測參數 (用於牆壁檢測)
+local raycastParams = RaycastParams.new()
+raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+
+-- ================= 建立 GUI =================
 local function getGuiParent()
     if gethui then
         return gethui()
@@ -21,7 +24,7 @@ local function getGuiParent()
 end
 
 local guiParent = getGuiParent()
-local guiName = "Safe_Pure_ESP"
+local guiName = "Safe_Pure_ESP_Mobile"
 
 if guiParent:FindFirstChild(guiName) then
     guiParent[guiName]:Destroy()
@@ -33,6 +36,31 @@ espGui.ResetOnSpawn = false
 espGui.IgnoreGuiInset = true
 espGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 espGui.Parent = guiParent
+
+-- 手機端自瞄開關按鈕
+local aimbotEnabled = false
+local toggleButton = Instance.new("TextButton")
+toggleButton.Size = UDim2.new(0, 120, 0, 45)
+toggleButton.Position = UDim2.new(1, -140, 0.5, -22) -- 螢幕右側中間
+toggleButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+toggleButton.TextColor3 = Color3.new(1, 0, 0)
+toggleButton.TextSize = 16
+toggleButton.Font = Enum.Font.Code
+toggleButton.Text = "Aimbot: OFF"
+toggleButton.BorderSizePixel = 2
+toggleButton.BorderColor3 = PURPLE_COLOR
+toggleButton.Parent = espGui
+
+toggleButton.Activated:Connect(function()
+    aimbotEnabled = not aimbotEnabled
+    if aimbotEnabled then
+        toggleButton.Text = "Aimbot: ON"
+        toggleButton.TextColor3 = Color3.new(0, 1, 0)
+    else
+        toggleButton.Text = "Aimbot: OFF"
+        toggleButton.TextColor3 = Color3.new(1, 0, 0)
+    end
+end)
 
 local nearestTracer = Instance.new("Frame")
 nearestTracer.BackgroundColor3 = PURPLE_COLOR
@@ -78,13 +106,13 @@ local function createVisual(player)
     local healthBarBg = Instance.new("Frame")
     healthBarBg.BackgroundColor3 = Color3.new(0, 0, 0)
     healthBarBg.BorderSizePixel = 0
-    healthBarBg.AnchorPoint = Vector2.new(1, 0) -- 右上角對齊
+    healthBarBg.AnchorPoint = Vector2.new(1, 0) 
     healthBarBg.Parent = container
 
     local healthBar = Instance.new("Frame")
     healthBar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
     healthBar.BorderSizePixel = 0
-    healthBar.AnchorPoint = Vector2.new(0, 1) -- 左下角對齊
+    healthBar.AnchorPoint = Vector2.new(0, 1) 
     healthBar.Position = UDim2.new(0, 0, 1, 0)
     healthBar.Parent = healthBarBg
 
@@ -115,7 +143,6 @@ local function removeVisual(player)
     end
 end
 
--- 初始化現有玩家（不含自己）
 for _, player in ipairs(Players:GetPlayers()) do
     if player ~= localPlayer then
         createVisual(player)
@@ -136,17 +163,21 @@ local function getHealthColor(percentage)
     end
 end
 
--- ================= 純 ESP 更新迴圈 (絕不亂飛) =================
+-- ================= ESP 與 Aimbot 迴圈 =================
 RunService.RenderStepped:Connect(function()
     local myChar = localPlayer.Character
     local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myHrp then return end
 
-    local viewportSize = camera.ViewportSize
-    local tracerOrigin = Vector2.new(viewportSize.X / 2, viewportSize.Y) -- 画面底部中间
+    -- 確保射線檢測忽略自己的角色
+    raycastParams.FilterDescendantsInstances = {myChar}
 
-    local nearestPlayer = nil
+    local viewportSize = camera.ViewportSize
+    local tracerOrigin = Vector2.new(viewportSize.X / 2, viewportSize.Y)
+
+    local aimbotTarget = nil
     local nearestLegScreenPos = nil
+    local shortestDistance = math.huge
 
     for player, data in pairs(playerVisuals) do
         local isVisible = false
@@ -164,7 +195,7 @@ RunService.RenderStepped:Connect(function()
 
                 if dist <= MAX_DISTANCE then
                     local headPos = head.Position + Vector3.new(0, 0.5, 0)
-                    local legPos = enemyPos - Vector3.new(0, 3, 0) -- 大約腳的高度
+                    local legPos = enemyPos - Vector3.new(0, 3, 0) 
 
                     local headVec, headOnScreen = camera:WorldToViewportPoint(headPos)
                     local legVec, _ = camera:WorldToViewportPoint(legPos)
@@ -175,8 +206,21 @@ RunService.RenderStepped:Connect(function()
                         local screenHead = Vector2.new(headVec.X, headVec.Y)
                         local screenLeg = Vector2.new(legVec.X, legVec.Y)
 
-                        if not nearestPlayer or dist < (nearestPlayer.Character.HumanoidRootPart.Position - myPos).Magnitude then
-                            nearestPlayer = player
+                        -- 找尋距離螢幕中心最近的玩家
+                        local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+                        local distanceFromCenter = (screenHead - screenCenter).Magnitude
+
+                        -- 牆壁檢測：從相機發射射線到敵人頭部
+                        local rayOrigin = camera.CFrame.Position
+                        local rayDirection = head.Position - rayOrigin
+                        local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+
+                        -- 如果沒碰到東西，或碰到的東西是該敵人的身體部位，代表可見
+                        local isVisibleThroughWall = (not raycastResult) or (raycastResult.Instance:IsDescendantOf(character))
+
+                        if isVisibleThroughWall and distanceFromCenter < shortestDistance then
+                            shortestDistance = distanceFromCenter
+                            aimbotTarget = player
                             nearestLegScreenPos = screenLeg
                         end
 
@@ -194,7 +238,7 @@ RunService.RenderStepped:Connect(function()
                         data.healthBar.Size = UDim2.new(1, 0, hpPercent, 0)
                         data.healthBar.BackgroundColor3 = getHealthColor(hpPercent)
 
-                        -- R15 骨架繪製
+                        -- 骨架
                         local isR15 = character:FindFirstChild("UpperTorso") ~= nil
                         for i, line in ipairs(data.skeletonLines) do
                             local link = skeletonLinks[i]
@@ -230,9 +274,21 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    if nearestPlayer and nearestLegScreenPos then
-        nearestTracer.Visible = true
-        drawLine(nearestTracer, tracerOrigin, nearestLegScreenPos, PURPLE_COLOR, LINE_THICKNESS)
+    -- 射線與自瞄邏輯 (只針對無牆壁遮擋的目標)
+    if aimbotTarget and aimbotTarget.Character and aimbotTarget.Character:FindFirstChild("Head") then
+        if nearestLegScreenPos then
+            nearestTracer.Visible = true
+            drawLine(nearestTracer, tracerOrigin, nearestLegScreenPos, PURPLE_COLOR, LINE_THICKNESS)
+        end
+        
+        -- 如果開啟了手機按鈕，執行鏡頭死鎖
+        if aimbotEnabled then
+            local targetHead = aimbotTarget.Character.Head.Position
+            local currentCamPos = camera.CFrame.Position
+            
+            -- 直接死鎖，無視角滑動
+            camera.CFrame = CFrame.new(currentCamPos, targetHead)
+        end
     else
         nearestTracer.Visible = false
     end
