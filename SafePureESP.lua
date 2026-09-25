@@ -1,11 +1,3 @@
-// Safe Pure ESP (絕對安全 ESP) – 修復版
--- 這個腳本不會對角色造成任何物理干擾，僅使用純 GUI 繪製 2D 方框、骨架、血條與最近敵人體感線。
--- 修正要點：
---   1. 使用安全的 GUI 父容器 (CoreGui/PlayerGui)；若 gethui 不存在則自動回退。
---   2. 針對部分 API 可能返回 nil 的情況加上防護，避免執行時拋出錯誤。
---   3. 確保最近敵人的血條與方框在畫面邊界外時仍能正常隱藏。
---   4. 清晰的註解與可配置參數。
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
